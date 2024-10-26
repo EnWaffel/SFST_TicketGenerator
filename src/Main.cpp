@@ -97,7 +97,7 @@ std::vector<int> GenerateIds(int num, bool random)
 
             do
             {
-                n = std::rand()* std::rand();
+                n = std::rand() * std::rand();
             } while (std::find(ids.begin(), ids.end(), n) != ids.end());
             
             ids.push_back(n);
