@@ -1,0 +1,1 @@
+SFST_TicketGenerator.exe -t 10 -r 1 -d -c -s 1.25 -p 4

@@ -21,7 +21,10 @@
 
 static int ticketY = 0;
 static float barcode_scale_ticket = 0.8f;
-static int tickets_per_page = 3;
+static int tickets_per_row = 3;
+static int ticket_rows_per_page = 2;
+static bool debug = false;
+static bool drawSeparatingLine = false;
 
 static const char* const usages[] = {
     "SFST_TicketGenerator [options] [[--] args]",
@@ -116,13 +119,13 @@ void GenerateSQL(std::vector<int>& ids)
     HANDLE file = CreateFile(L"insert.sql", GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE)
     {
-        std::cout << "ERROR: Konnte 'sql.txt' nicht erstellen!" << std::endl;
+        std::cout << "ERROR: Konnte 'insert.sql' nicht erstellen!" << std::endl;
         return;
     }
 
     for (int num : ids)
     {
-        std::string str = "INSERT INTO `tickets` (`id`, `used`) VALUES (";
+        std::string str = "INSERT INTO papi_sfst_ticket.tickets (`id`, `used`) VALUES (";
         str.append(std::to_string(num));
         str.append(", false");
         str.append(");\n");
@@ -135,7 +138,7 @@ void GenerateSQL(std::vector<int>& ids)
 
 void GenerateBarcodes(int num, bool random)
 {
-    DeleteFile(L"sql.txt");
+    DeleteFile(L"insert.sql");
     DeleteFolderAndContents(L"temp\\");
     DeleteFolderAndContents(L"out\\");
 
@@ -188,7 +191,7 @@ void CombineIntoPrintableImages()
             int comp = 0;
             stbi_uc* data = stbi_load(("temp/" + std::to_string(id) + ".png").c_str(), &width, &height, &comp, PAGE_COLOR_CHANNELS);
 
-            std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
+            if (debug) std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
 
             int newWidth = width * BARCODE_SCALE;
             int newHeight = height * BARCODE_SCALE;
@@ -245,7 +248,7 @@ void CombineIntoPrintableImagesForTickets()
     stbi_uc* templateData = stbi_load("ticket.png", &templateW, &templateH, &templateComps, 3);
     templateSize = templateW * templateH * templateComps;
 
-    std::cout << "template (w: " << templateW << " | h: " << templateH << " | c: " << templateComps << ")" << std::endl;
+    if (debug) std::cout << "template (w: " << templateW << " | h: " << templateH << " | c: " << templateComps << ")" << std::endl;
 
     for (int i = 0; i < ids.size(); i++)
     {
@@ -260,7 +263,7 @@ void CombineIntoPrintableImagesForTickets()
         int height = 0;
         int comp = 0;
         stbi_uc* data = stbi_load(("temp/" + std::to_string(id) + ".png").c_str(), &width, &height, &comp, PAGE_COLOR_CHANNELS);
-        std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
+        if (debug) std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
 
         int pageOffsetX = templateW / 2 - (width * barcode_scale_ticket) / 2;
         int pageOffsetY = ticketY;
@@ -303,41 +306,92 @@ void CombinetTicketsIntoPages()
 {
     std::cout << "Kombiniere Tickets..." << std::endl;
 
-    for (int i = 0; i < ids.size(); i += tickets_per_page)
+    int pageNum = 1;
+    int ticketNum = 1;
+    for (int i = 0; i < ids.size(); i += tickets_per_row * ticket_rows_per_page)
     {
         int pageSize = (2480 * 3508) * PAGE_COLOR_CHANNELS;
         stbi_uc* page = new stbi_uc[pageSize];
         memset(page, 255, pageSize);
 
-        int pageOffsetX = 15;
+        int pageOffsetX = 0;
+        int pageOffsetY = 0;
+        int commonHeight = 0;
 
-        for (int j = 0; j < tickets_per_page; j++)
+        for (int _i = 0; _i < ticket_rows_per_page; _i++)
         {
-            int width = 0;
-            int height = 0;
-            int comp = 0;
-            stbi_uc* data = stbi_load(("out/" + std::to_string(i + j + 1) + ".png").c_str(), &width, &height, &comp, PAGE_COLOR_CHANNELS);
-            DeleteFile((L"out/" + std::to_wstring(i + j + 1) + L".png").c_str());
-            std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
-
-            for (int y = 0; y < height; y++)
+            for (int j = 0; j < tickets_per_row; j++)
             {
-                size_t offsetDest = (y * PAGE_WIDTH + pageOffsetX) * PAGE_COLOR_CHANNELS;
-                size_t offsetSource = y * width * PAGE_COLOR_CHANNELS;
+                int width = 0;
+                int height = 0;
+                int comp = 0;
+                stbi_uc* data = stbi_load(("out/" + std::to_string(ticketNum) + ".png").c_str(), &width, &height, &comp, PAGE_COLOR_CHANNELS);
+                if (data == nullptr) break;
 
-                memcpy_s(&page[offsetDest], PAGE_WIDTH, &data[offsetSource], width * PAGE_COLOR_CHANNELS);
+                DeleteFile((L"out/" + std::to_wstring(ticketNum) + L".png").c_str());
+                if (debug) std::cout << "(w: " << width << " | h: " << height << " | c: " << comp << ")" << std::endl;
+
+                for (int y = 0; y < height; y++)
+                {
+                    size_t offsetDest = ((y + pageOffsetY) * PAGE_WIDTH + pageOffsetX) * PAGE_COLOR_CHANNELS;
+                    size_t offsetSource = y * width * PAGE_COLOR_CHANNELS;
+
+                    memcpy_s(&page[offsetDest], PAGE_WIDTH, &data[offsetSource], width * PAGE_COLOR_CHANNELS);
+                }
+
+                stbi_image_free(data);
+
+                pageOffsetX += width + 15;
+                commonHeight += height;
+                ticketNum++;
             }
 
-            stbi_image_free(data);
+            if (drawSeparatingLine)
+            {
+                if (pageOffsetY < PAGE_HEIGHT)
+                {
+                    memset(&page[(pageOffsetY * PAGE_WIDTH) * PAGE_COLOR_CHANNELS], 0, PAGE_WIDTH * PAGE_COLOR_CHANNELS);
+                }
+            }
 
-            pageOffsetX += width + 15;
+            int avgHeight = commonHeight / tickets_per_row;
+            pageOffsetY += commonHeight / tickets_per_row + 15;
+            pageOffsetX = 0;
         }
 
-        stbi_write_png(("out/" + std::to_string(i + 1) + ".png").c_str(), PAGE_WIDTH, PAGE_HEIGHT, PAGE_COLOR_CHANNELS, page, PAGE_WIDTH * PAGE_COLOR_CHANNELS);
+        if (drawSeparatingLine)
+        {
+            if (pageOffsetY < PAGE_HEIGHT)
+            {
+                memset(&page[(pageOffsetY * PAGE_WIDTH) * PAGE_COLOR_CHANNELS], 0, PAGE_WIDTH * PAGE_COLOR_CHANNELS);
+            }
+        }
+
+        stbi_write_png(("out/" + std::to_string(pageNum) + ".png").c_str(), PAGE_WIDTH, PAGE_HEIGHT, PAGE_COLOR_CHANNELS, page, PAGE_WIDTH * PAGE_COLOR_CHANNELS);
         delete[] page;
 
-        std::cout << "out/" + std::to_string(i + 1) + ".png" << " generiert" << std::endl;;
+        std::cout << "out/" + std::to_string(pageNum) + ".png" << " generiert" << std::endl;
+
+        pageNum++;
     }
+}
+
+static void GenerateBarcode(const char* text)
+{
+    DeleteFolderAndContents(L"out\\");
+    CreateDirectory(L"out", NULL);
+
+    struct zint_symbol* symbol;
+    symbol = ZBarcode_Create();
+
+    const char* outFile = "out/1.png";
+    memcpy_s(symbol->outfile, sizeof(symbol->outfile), outFile, strlen(outFile));
+    ZBarcode_Encode(symbol, (const unsigned char*)text, 0);
+    ZBarcode_Print(symbol, 0);
+
+    ZBarcode_Delete(symbol);
+
+    std::cout << "Barcode generiert!" << std::endl;
 }
 
 int main(int argc, const char** argv)
@@ -345,7 +399,8 @@ int main(int argc, const char** argv)
     int ticketNum = 0;
     int _useRandomNumbers = 1;
     int _directTickets = 0;
-    int combineDirectTickets = 0;
+    int _combineDirectTickets = 0;
+    const char* textForBarcode = nullptr;
 
     struct argparse_option options[] = {
         OPT_HELP(),
@@ -353,9 +408,13 @@ int main(int argc, const char** argv)
         OPT_INTEGER('t', "tnum", &ticketNum, "Anzahl der Tickets", NULL, 0, 0),
         OPT_INTEGER('r', "rnd", &_useRandomNumbers, "Zufaellige Zahlen fuer die Tickets benutzen", NULL, 0, 0),
         OPT_BOOLEAN('d', "dt", &_directTickets, "Direkt die Barcodes auf Tickets packen", NULL, 0, 0),
-        OPT_INTEGER('c', "cdt", &combineDirectTickets, "Nach der Generierung die Tickets auf DIN-A4 Blaetter packen (2 = 90 rotation)", NULL, 0, 0),
-        OPT_INTEGER('p', "tp", &tickets_per_page, "Tickets per Seite", NULL, 0, 0),
-        OPT_FLOAT('s', "ts", &barcode_scale_ticket, "Barcode groeße auf Tickets", NULL, 0, 0),
+        OPT_BOOLEAN('c', "cdt", &_combineDirectTickets, "Nach der Generierung die Tickets auf DIN-A4 Blaetter packen", NULL, 0, 0),
+        OPT_INTEGER('p', "tp", &tickets_per_row, "Tickets per Reihe", NULL, 0, 0),
+        OPT_INTEGER('v', "tr", &ticket_rows_per_page, "Reihen per Seite", NULL, 0, 0),
+        OPT_FLOAT('s', "ts", &barcode_scale_ticket, "Barcode groesse auf Tickets", NULL, 0, 0),
+        OPT_BOOLEAN('b', "db", &debug, "Debug Info", NULL, 0, 0),
+        OPT_BOOLEAN('l', "dl", &drawSeparatingLine, "Linie zum ausschneiden", NULL, 0, 0),
+        OPT_STRING('g', "gn", &textForBarcode, "Generiere Barcodes", NULL, 0, 0),
         OPT_END(),
     };
 
@@ -366,7 +425,14 @@ int main(int argc, const char** argv)
 
     bool useRandomNumbers = _useRandomNumbers;
     bool directTickets = _directTickets;
+    bool combineDirectTickets = _combineDirectTickets;
 
+    if (textForBarcode)
+    {
+        GenerateBarcode(textForBarcode);
+        return 0;
+    }
+    
     if (ticketNum < 1)
     {
         std::cout << "ERROR: Die Ticket Anzahl muss mindestens 1 sein!" << std::endl;
@@ -401,7 +467,7 @@ int main(int argc, const char** argv)
         CombineIntoPrintableImages();
     }
 
-    if (combineDirectTickets > 0)
+    if (combineDirectTickets)
     {
         CombinetTicketsIntoPages();
     }
